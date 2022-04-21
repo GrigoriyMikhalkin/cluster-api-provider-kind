@@ -30,13 +30,12 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
-	capiv1beta1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/cluster-api/util/annotations"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/kind/pkg/cluster"
+	kindcluster "sigs.k8s.io/kind/pkg/cluster"
 
 	infrastructurev1beta1 "github.com/grigoriymikhalkin/cluster-api-provider-kind/api/v1beta1"
 )
@@ -49,7 +48,7 @@ const (
 type KindClusterReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Provider *cluster.Provider
+	Provider *kindcluster.Provider
 }
 
 //+kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=kindclusters,verbs=get;list;watch;create;update;patch;delete
@@ -76,38 +75,30 @@ func (r *KindClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, fmt.Errorf("failed to get OwnerCluster: %w", err)
 	}
 	if cluster == nil {
-		logger.Info("Waiting for cluster controller to set OwnerRef to kindCluster")
+		logger.Info("Waiting for cluster controller to set OwnerRef to KindCluster")
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Check if cluster is paused
 	if annotations.IsPaused(cluster, kindCluster) {
-		logger.Info("reconcilation is paused for this object")
+		logger.Info("Reconcilation is paused for this object")
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if !kindCluster.ObjectMeta.DeletionTimestamp.IsZero() {
-		r.delete(ctx, logger, kindCluster)
+		return r.delete(logger, kindCluster)
 	}
 
-	return r.reconcile(ctx, logger, cluster, kindCluster)
+	return r.reconcile(ctx, logger, kindCluster)
 }
 
-func (r *KindClusterReconciler) delete(ctx context.Context, logger logr.Logger, kindCluster *infrastructurev1beta1.KindCluster) (ctrl.Result, error) {
+func (r *KindClusterReconciler) delete(logger logr.Logger, kindCluster *infrastructurev1beta1.KindCluster) (ctrl.Result, error) {
 	logger.Info("Deleting KindCluster")
 
-	tmp, err := ioutil.TempFile("/tmp", "kubeconfig")
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to create temporary kubeconfig: %w", err)
-	}
-	defer os.Remove(tmp.Name())
-
-	if err := r.Provider.ExportKubeConfig(kindCluster.Spec.Name, tmp.Name(), false); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to export kubeconfig to a file: %w", err)
-	}
-	if err := r.Provider.Delete(kindCluster.Spec.Name, tmp.Name()); err != nil {
+	if err := r.Provider.Delete(kindCluster.Spec.Name, kindCluster.Status.KubeconfigPath); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to delete Kind cluster: %w", err)
 	}
+	os.Remove(kindCluster.Status.KubeconfigPath)
 
 	controllerutil.RemoveFinalizer(kindCluster, kindClusterFinalizer)
 	logger.Info("KindCluster was successfully deleted")
@@ -115,7 +106,7 @@ func (r *KindClusterReconciler) delete(ctx context.Context, logger logr.Logger, 
 	return ctrl.Result{}, nil
 }
 
-func (r *KindClusterReconciler) reconcile(ctx context.Context, logger logr.Logger, cluster *capiv1beta1.Cluster, kindCluster *infrastructurev1beta1.KindCluster) (ctrl.Result, error) {
+func (r *KindClusterReconciler) reconcile(ctx context.Context, logger logr.Logger, kindCluster *infrastructurev1beta1.KindCluster) (ctrl.Result, error) {
 	controllerutil.AddFinalizer(kindCluster, kindClusterFinalizer)
 
 	var (
@@ -128,16 +119,28 @@ func (r *KindClusterReconciler) reconcile(ctx context.Context, logger logr.Logge
 
 	// Create Cluster if it's not already exists
 	if len(nodeList) < 1 {
-		if err = r.Provider.Create(kindCluster.Spec.Name); err != nil {
+		tmp, err := ioutil.TempFile("/tmp", "kubeconfig-")
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to create kubeconfig file: %w", err)
+		}
+
+		if err = r.Provider.Create(
+			kindCluster.Spec.Name,
+			kindcluster.CreateWithKubeconfigPath(tmp.Name()),
+		); err != nil {
+			os.Remove(tmp.Name())
 			return ctrl.Result{}, fmt.Errorf("failed to create Kind cluster: %w", err)
 		}
+
+		kindCluster.Status.KubeconfigPath = tmp.Name()
+		r.Client.Status().Update(ctx, kindCluster)
+		r.Client.Update(ctx, kindCluster)
 
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	if kindCluster.Spec.ControlPlaneEndpoint.Host == "" {
 		kc, err := r.Provider.KubeConfig(kindCluster.Spec.Name, false)
-		//ipv4, _, err := nodeList[0].IP()
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to fetch kubeconfig for a cluster: %w", err)
 		}
@@ -156,8 +159,12 @@ func (r *KindClusterReconciler) reconcile(ctx context.Context, logger logr.Logge
 		kindCluster.Spec.ControlPlaneEndpoint.Host = hostIP
 		kindCluster.Spec.ControlPlaneEndpoint.Port = int32(port)
 	}
-	kindCluster.Status.Ready = true
 
+	kindCluster.Status.Ready = true
+	r.Client.Update(ctx, kindCluster)
+	r.Client.Status().Update(ctx, kindCluster)
+
+	logger.Info("Successfully finished KindCluster reconcilation")
 	return ctrl.Result{}, nil
 }
 

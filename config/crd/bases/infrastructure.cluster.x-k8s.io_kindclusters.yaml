@@ -57,10 +57,14 @@ spec:
           status:
             description: KindClusterStatus defines the observed state of KindCluster
             properties:
+              kubeconfigPath:
+                description: KubeconfigPath is local path to cluster keboconfig
+                type: string
               ready:
                 description: Ready denotes that the cluster is ready.
                 type: boolean
             required:
+            - kubeconfigPath
             - ready
             type: object
         type: object

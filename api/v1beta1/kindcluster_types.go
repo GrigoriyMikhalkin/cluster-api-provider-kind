@@ -43,6 +43,9 @@ type KindClusterStatus struct {
 
 	// Ready denotes that the cluster is ready.
 	Ready bool `json:"ready"`
+
+	// KubeconfigPath is local path to cluster keboconfig
+	KubeconfigPath string `json:"kubeconfigPath"`
 }
 
 //+kubebuilder:object:root=true
