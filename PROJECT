@@ -11,6 +11,6 @@ resources:
   domain: cluster.x-k8s.io
   group: infrastructure
   kind: KindCluster
-  path: github.com/grigoriymikhalkin/cluster-api-provider-kind/api/v1alpha3
-  version: v1alpha3
+  path: github.com/grigoriymikhalkin/cluster-api-provider-kind/api/v1beta1
+  version: v1beta1
 version: "3"

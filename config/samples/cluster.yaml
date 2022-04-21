@@ -1,0 +1,16 @@
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: cluster-sample
+spec:
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+    kind: KindCluster
+    name: kindcluster-sample
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1beta1
+kind: KindCluster
+metadata:
+  name: kindcluster-sample
+spec:
+  name: sample
